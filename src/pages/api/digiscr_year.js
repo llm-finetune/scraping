@@ -22,7 +22,7 @@ export default async function handler(req, res) {
     console.log("Navigating to site...");
     await page.goto("https://digiscr.sci.gov.in", { waitUntil: "networkidle2" });
 
-    await page.waitForSelector('select[name="year"]', { timeout: 15000 });
+    //await page.waitForSelector('select[name="year"]', { timeout: 15000 });
     // Get all available years
     await page.waitForSelector("select[name='year']", { timeout: 15000 });
     const years = await page.evaluate(() => {
@@ -32,33 +32,17 @@ export default async function handler(req, res) {
     });
 
     console.log(`Found ${years.length} years to process.`);
-   /* 
-    // Extract dropdown values
-    const options = await page.evaluate(() => {
-      const getDropdownValues = (selector) =>
-        Array.from(document.querySelectorAll(`${selector} option`))
-          .map((option) => ({
-            value: option.value,
-            text: option.innerText.trim(),
-          }))
-          .filter((opt) => opt.value !== "");
-
-      return {
-        years: getDropdownValues('select[name="year"]'),
-        volumes: getDropdownValues('select[name="volume"]'),
-        parts: getDropdownValues('select[name="partno"]'),
-      };
-    });
-
-    console.log("Extracted options:", options);
-*/
+   
     const dataDir = path.join(process.cwd(), "public", "data");
     await fs.ensureDir(dataDir);
 
 
 
     for (const year of years) {
-      console.log(`Processing Year: ${year}`);
+        if (year !== "2025") {
+            continue;
+        }
+        console.log(`Processing Year: ${year}`);
         await page.select("select[name='year']", year);
         await new Promise(resolve => setTimeout(resolve, 3000));
 
@@ -81,9 +65,9 @@ export default async function handler(req, res) {
           console.warn(`Skipping volume selection as volume dropdown is not available for Year: ${year.text}`);
         }
         let parts = [{ value: "", text: "Full Volume" }];
-            if (await page.$("select[name='part']")) {
+            if (await page.$("select[name='partno']")) {
               parts = await page.evaluate(() => {
-                return Array.from(document.querySelectorAll("select[name='part'] option"))
+                return Array.from(document.querySelectorAll("select[name='partno'] option"))
                   .map(option => ({ value: option.value, text: option.innerText.trim() }))
                   .filter(opt => opt.value !== "");
               });
@@ -128,7 +112,7 @@ export default async function handler(req, res) {
           
           for (let link of links) {
             try {
-              console.log(`Opening case: ${link.text}`);
+              //console.log(`Opening case: ${link.text}`);
           
               // Click the judgment link and wait for modal
               const element = await page.$(`a[onclick*="'${link.base64_id}',"]`);
@@ -137,7 +121,7 @@ export default async function handler(req, res) {
                 await new Promise(resolve => setTimeout(resolve, 2000)); // Allow extra time for modal to load
           
                          
-                console.log(`Successfully opened case: ${link.text}`);
+                //console.log(`Successfully opened case: ${link.text}`);
           
                 // Extract judgment details
                 // Extract judgment details
@@ -198,7 +182,7 @@ export default async function handler(req, res) {
 
       const filePath = path.join(dataDir, `${year}.json`);
       await fs.writeJson(filePath, yearData);
-      console.log(`Saved data for Year: ${year.text}`);
+      console.log(`Saved data for Year: ${year}`);
     }
 
     await browser.close();
