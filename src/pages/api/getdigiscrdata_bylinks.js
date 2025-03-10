@@ -41,7 +41,7 @@ export default async function handler(req, res) {
     await fs.ensureDir(dataDir);
 
     for (const year of years) {
-      if (year !== "2023") {
+      if (year !== "2025") {
         continue;
       }
       //check if year json file exists
@@ -154,6 +154,8 @@ export default async function handler(req, res) {
             try {
               await scrapingPage.goto(entry.link, { waitUntil: "domcontentloaded" });
               await scrapingPage.waitForSelector(".table-responsive");
+              // Add wait for dynamic content
+              await scrapingPage.waitForSelector("#dynamic_content", { timeout: 5000 }).catch(() => console.log("No dynamic content found"));
 
               const details = await scrapeJudgmentDetails(scrapingPage);
 
@@ -194,7 +196,8 @@ export default async function handler(req, res) {
 }
 
 async function scrapeJudgmentDetails(page) {
-  return await page.evaluate(() => {
+  // First get all the basic details
+  const basicDetails = await page.evaluate(() => {
     const getTableData = (labelText) => {
       const rows = Array.from(document.querySelectorAll(".table-responsive table tbody tr"));
       const row = rows.find(tr => tr.children[0]?.innerText.trim() === labelText);
@@ -223,6 +226,79 @@ async function scrapeJudgmentDetails(page) {
       keyword: getHeader5Data("4. Keyword"),
     };
   });
+
+  // Now handle the case referred pagination
+  const caseReferred = [];
+  
+  try {
+    // Wait for the dynamic content to load
+    await page.waitForSelector("#dynamic_content", { timeout: 5000 });
+    
+    // Get total number of pages
+    const totalPages = await page.evaluate(() => {
+      const pagination = document.querySelector('.pagination');
+      if (!pagination) return 1;
+      
+      const pageLinks = Array.from(pagination.querySelectorAll('li a'));
+      const pageNumbers = pageLinks
+        .map(a => parseInt(a.textContent.trim()))
+        .filter(num => !isNaN(num));
+      
+      return Math.max(...pageNumbers) || 1;
+    });
+
+    console.log(`Total pages in case referred: ${totalPages}`);
+
+    // Iterate through each page
+    for (let currentPage = 1; currentPage <= totalPages; currentPage++) {
+      if (currentPage > 1) {
+        // Click the next page link
+        await page.evaluate((pageNum) => {
+          const pageLinks = Array.from(document.querySelectorAll('.pagination li a'));
+          const targetLink = pageLinks.find(a => a.textContent.trim() === pageNum.toString());
+          if (targetLink) {
+            targetLink.click();
+          }
+        }, currentPage);
+
+        // Wait for the table to update
+        await page.waitForTimeout(1000); // Give time for the table to update
+      }
+
+      // Extract data from current page
+      const pageData = await page.evaluate(() => {
+        const table = document.querySelector("#dynamic_content table");
+        if (!table) return [];
+
+        const rows = table.querySelectorAll("tr");
+        if (!rows || rows.length === 0) return [];
+
+        // Skip the header row
+        const dataRows = Array.from(rows).slice(1);
+        
+        return dataRows.map(row => {
+          const cols = row.querySelectorAll("td");
+          if (cols.length < 4) return null;
+          
+          return {
+            sr_no: cols[0]?.innerText.trim() || "",
+            scr_citation: cols[1]?.innerText.trim() || "",
+            judi_consi: cols[2]?.innerText.trim() || "",
+            lnkd_judg_nm: cols[3]?.innerText.trim() || "",
+          };
+        }).filter(row => row && row.scr_citation);
+      });
+
+      caseReferred.push(...pageData);
+    }
+  } catch (error) {
+    console.error("Error scraping case referred data:", error);
+  }
+
+  return {
+    ...basicDetails,
+    caseReferred: caseReferred
+  };
 }
 
 
