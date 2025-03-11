@@ -103,6 +103,7 @@ export default async function handler(req, res) {
               //console.log("match:", match);
               if (match) {
                 return {
+                  base64_id: match[1],
                   link: "https://digiscr.sci.gov.in/view_judgment?id=" + match[1],
                   staus: "pending"
                   //text: el.innerText.trim(),
@@ -153,10 +154,11 @@ export default async function handler(req, res) {
 
             try {
               await scrapingPage.goto(entry.link, { waitUntil: "domcontentloaded" });
+             // console.log(await scrapingPage.content());
               await scrapingPage.waitForSelector(".table-responsive");
               // Add wait for dynamic content
               await scrapingPage.waitForSelector("#dynamic_content", { timeout: 5000 }).catch(() => console.log("No dynamic content found"));
-
+              
               const details = await scrapeJudgmentDetails(scrapingPage);
 
               entry.details = details;
@@ -196,7 +198,7 @@ export default async function handler(req, res) {
 }
 
 async function scrapeJudgmentDetails(page) {
-  // First get all the basic details
+  // First get all the basic details except headnote
   const basicDetails = await page.evaluate(() => {
     const getTableData = (labelText) => {
       const rows = Array.from(document.querySelectorAll(".table-responsive table tbody tr"));
@@ -207,7 +209,10 @@ async function scrapeJudgmentDetails(page) {
     const getHeader5Data = (headerText) => {
       const divs = Array.from(document.querySelectorAll(".view-keyword"));
       const div = divs.find(div => div.children[0]?.innerText.trim() === headerText);
-      return div ? div.children[1]?.innerText.trim() || "N/A" : "N/A";
+      if (!div) return "N/A";
+      const contentDiv = div.children[1];
+      if (!contentDiv) return "N/A";
+      return contentDiv.innerText.trim();
     };
 
     return {
@@ -221,11 +226,60 @@ async function scrapeJudgmentDetails(page) {
       respondent: getTableData("Respondent:"),
       case_type: getTableData("Case Type:"),
       order_judgment: getTableData("Order/Judgment:"),
-      headnote: getHeader5Data("1. Headnote"),
       act: getHeader5Data("3. Act"),
       keyword: getHeader5Data("4. Keyword"),
     };
   });
+
+  // Handle headnote separately with special treatment
+  try {
+    // First locate the headnote section
+    const headnoteSection = await page.locator('.view-keyword', {
+      has: page.locator('h5:text("1. Headnote")')
+    });
+
+    if (await headnoteSection.count() > 0) {
+      // Click any "Read More" link if it exists
+      const readMoreLink = headnoteSection.locator('.read-more__link');
+      if (await readMoreLink.count() > 0) {
+        await readMoreLink.click();
+        await page.waitForTimeout(1000);
+      }
+
+      // Get the full headnote content
+      const headnoteContent = await headnoteSection.evaluate(element => {
+        // Try to get content from various possible elements
+        const readMoreDiv = element.querySelector('.js-read-more');
+        if (readMoreDiv) {
+          // Get all text content, including hidden parts
+          const allParagraphs = readMoreDiv.querySelectorAll('p');
+          if (allParagraphs.length > 0) {
+            return Array.from(allParagraphs)
+              .map(p => p.textContent.trim())
+              .filter(text => text)
+              .join('\n');
+          }
+          
+          // If no paragraphs, get the direct text content
+          const textContent = readMoreDiv.textContent;
+          if (textContent) {
+            return textContent.replace(/Read More/gi, '').trim();
+          }
+        }
+
+        // Fallback to getting content from the main div
+        const contentDiv = element.querySelector('div:nth-child(2)');
+        return contentDiv ? contentDiv.textContent.trim() : 'N/A';
+      });
+
+      basicDetails.headnote = headnoteContent;
+    } else {
+      basicDetails.headnote = "N/A";
+    }
+  } catch (error) {
+    console.error("Error extracting headnote:", error);
+    basicDetails.headnote = "Error extracting headnote";
+  }
 
   // Now handle the case referred pagination
   const caseReferred = [];
